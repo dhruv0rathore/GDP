@@ -20,7 +20,16 @@ export interface Leader {
 }
 
 export interface TimelineProps {
-  countryData: CountryData;
+  countryData: CountryData[];
   selectedPeriod: [number, number];
   showGrowthRate: boolean;
+  onExport: (data: CountryData) => void;
+  comparisonMode?: boolean;
+}
+
+export interface ComparisonMetrics {
+  startingRatio: number;
+  endingRatio: number;
+  averageGrowthDiff: number;
+  overtakes: Array<{ year: number; country: string }>;
 }

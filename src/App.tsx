@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, BarChart3, Moon, Sun } from 'lucide-react';
+import { Download, BarChart3, Moon, Sun, ArrowLeftRight } from 'lucide-react';
 import Timeline from './components/Timeline';
 import CountrySelector from './components/CountrySelector';
 import { fetchGDPData, fetchCountries } from './services/worldBankAPI';
@@ -35,6 +35,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [availableCountries, setAvailableCountries] = useState<Array<{ code: string; name: string; region: string; }>>([]);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  const [comparisonMode, setComparisonMode] = useState(false);
 
   useEffect(() => {
     const loadCountries = async () => {
@@ -48,6 +49,12 @@ function App() {
 
     loadCountries();
   }, []);
+
+  useEffect(() => {
+    if (comparisonMode && selectedCountries.length !== 2) {
+      setSelectedCountries(selectedCountries.slice(0, 2));
+    }
+  }, [comparisonMode, selectedCountries]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -91,7 +98,6 @@ function App() {
       }))
     };
 
-    // Export as JSON
     const jsonBlob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
     const jsonUrl = URL.createObjectURL(jsonBlob);
     const jsonLink = document.createElement('a');
@@ -102,7 +108,6 @@ function App() {
     document.body.removeChild(jsonLink);
     URL.revokeObjectURL(jsonUrl);
 
-    // Export as CSV
     const csvContent = [
       ['Year', 'GDP per Capita (USD)', 'Growth Rate (%)'],
       ...data.gdpData.map(d => [d.year, d.value, d.growth.toFixed(2)])
@@ -146,19 +151,31 @@ function App() {
                 <BarChart3 size={20} />
                 {showGrowthRate ? 'Show Absolute Values' : 'Show Growth Rate'}
               </button>
+              <button
+                onClick={() => setComparisonMode(!comparisonMode)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
+                  isDarkMode ? 'bg-purple-600 text-white' : 'bg-purple-500 text-white'
+                }`}
+              >
+                <ArrowLeftRight size={20} />
+                {comparisonMode ? 'Single Country' : 'Compare Countries'}
+              </button>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
             <div className="col-span-2">
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                Select Countries
+                {comparisonMode ? 'Select Two Countries to Compare' : 'Select Countries'}
               </label>
               <CountrySelector
                 selectedCountries={selectedCountries}
                 onCountryChange={setSelectedCountries}
                 availableCountries={availableCountries}
               />
+              {comparisonMode && selectedCountries.length !== 2 && (
+                <p className="mt-2 text-yellow-500 text-sm">Please select exactly two countries for comparison.</p>
+              )}
             </div>
             <div className="col-span-1">
               <label className={`block text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
@@ -223,16 +240,28 @@ function App() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
               >
-                {Object.values(countryData).map((country) => (
-                  <div key={country.id} className="mb-8">
+                {comparisonMode ? (
+                  selectedCountries.length === 2 && (
                     <Timeline
-                      countryData={country}
+                      countryData={selectedCountries.map(code => countryData[code])}
                       selectedPeriod={timeRange}
                       showGrowthRate={showGrowthRate}
                       onExport={handleExport}
+                      comparisonMode={true}
                     />
-                  </div>
-                ))}
+                  )
+                ) : (
+                  Object.values(countryData).map((country) => (
+                    <div key={country.id} className="mb-8">
+                      <Timeline
+                        countryData={[country]}
+                        selectedPeriod={timeRange}
+                        showGrowthRate={showGrowthRate}
+                        onExport={handleExport}
+                      />
+                    </div>
+                  ))
+                )}
               </motion.div>
             )}
           </AnimatePresence>

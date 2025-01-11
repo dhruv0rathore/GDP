@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useMemo } from 'react';
 import {
   LineChart,
   Line,
@@ -9,25 +9,87 @@ import {
   Legend,
   ResponsiveContainer,
   ReferenceLine,
-  Brush
+  Brush,
+  Label
 } from 'recharts';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { TimelineProps } from '../types';
+import type { TimelineProps, ComparisonMetrics } from '../types';
 import { Download, ZoomIn, ZoomOut } from 'lucide-react';
+
+const COLORS = ['#3B82F6', '#EC4899'];
 
 const Timeline: React.FC<TimelineProps> = ({
   countryData,
   selectedPeriod,
   showGrowthRate,
-  onExport
+  onExport,
+  comparisonMode = false
 }) => {
   const [zoomDomain, setZoomDomain] = useState<[number, number] | null>(null);
   const chartRef = useRef<any>(null);
 
-  const filteredData = countryData.gdpData.filter(
-    d => d.year >= selectedPeriod[0] && d.year <= selectedPeriod[1]
-  );
+  const combinedData = useMemo(() => {
+    const allYears = new Set<number>();
+    countryData.forEach(country => {
+      country.gdpData.forEach(d => allYears.add(d.year));
+    });
+
+    return Array.from(allYears)
+      .sort((a, b) => a - b)
+      .filter(year => year >= selectedPeriod[0] && year <= selectedPeriod[1])
+      .map(year => {
+        const dataPoint: any = { year };
+        countryData.forEach((country, index) => {
+          const yearData = country.gdpData.find(d => d.year === year);
+          if (yearData) {
+            dataPoint[`${country.id}_value`] = yearData.value;
+            dataPoint[`${country.id}_growth`] = yearData.growth;
+          }
+        });
+        return dataPoint;
+      });
+  }, [countryData, selectedPeriod]);
+
+  const comparisonMetrics = useMemo((): ComparisonMetrics | null => {
+    if (!comparisonMode || countryData.length !== 2) return null;
+
+    const [country1, country2] = countryData;
+    const metrics: ComparisonMetrics = {
+      startingRatio: 0,
+      endingRatio: 0,
+      averageGrowthDiff: 0,
+      overtakes: []
+    };
+
+    const firstYear = combinedData[0];
+    const lastYear = combinedData[combinedData.length - 1];
+
+    metrics.startingRatio = firstYear[`${country1.id}_value`] / firstYear[`${country2.id}_value`];
+    metrics.endingRatio = lastYear[`${country1.id}_value`] / lastYear[`${country2.id}_value`];
+
+    let prevRatio = metrics.startingRatio;
+    combinedData.forEach((data, index) => {
+      if (index === 0) return;
+      
+      const currentRatio = data[`${country1.id}_value`] / data[`${country2.id}_value`];
+      if ((prevRatio < 1 && currentRatio > 1) || (prevRatio > 1 && currentRatio < 1)) {
+        metrics.overtakes.push({
+          year: data.year,
+          country: currentRatio > 1 ? country1.name : country2.name
+        });
+      }
+      prevRatio = currentRatio;
+    });
+
+    const totalGrowthDiff = combinedData.reduce((acc, curr, index) => {
+      if (index === 0) return acc;
+      return acc + (curr[`${country1.id}_growth`] - curr[`${country2.id}_growth`]);
+    }, 0);
+    metrics.averageGrowthDiff = totalGrowthDiff / (combinedData.length - 1);
+
+    return metrics;
+  }, [combinedData, countryData, comparisonMode]);
 
   const handleZoomIn = () => {
     if (chartRef.current && chartRef.current.state && chartRef.current.state.domain) {
@@ -57,14 +119,13 @@ const Timeline: React.FC<TimelineProps> = ({
     }
   };
 
-  // Set initial domain based on the filtered data
-  const initialDomain = React.useMemo(() => {
-    if (filteredData.length > 0) {
-      const years = filteredData.map(d => d.year);
+  const initialDomain = useMemo(() => {
+    if (combinedData.length > 0) {
+      const years = combinedData.map(d => d.year);
       return [Math.min(...years), Math.max(...years)];
     }
     return null;
-  }, [filteredData]);
+  }, [combinedData]);
 
   return (
     <div 
@@ -72,10 +133,14 @@ const Timeline: React.FC<TimelineProps> = ({
       onKeyDown={handleKeyDown}
       tabIndex={0}
       role="application"
-      aria-label={`GDP timeline for ${countryData.name}`}
+      aria-label={comparisonMode ? "GDP comparison chart" : `GDP timeline for ${countryData[0].name}`}
     >
       <div className="flex justify-between items-center mb-4">
-        <h3 className="text-xl font-bold text-white">{countryData.name}</h3>
+        <h3 className="text-xl font-bold text-white">
+          {comparisonMode 
+            ? `${countryData[0].name} vs ${countryData[1].name}`
+            : countryData[0].name}
+        </h3>
         <div className="flex gap-2">
           <button
             onClick={handleZoomIn}
@@ -91,20 +156,46 @@ const Timeline: React.FC<TimelineProps> = ({
           >
             <ZoomOut size={20} />
           </button>
-          <button
-            onClick={() => onExport(countryData)}
-            className="p-2 bg-gray-800 text-white rounded-md hover:bg-gray-700 transition-colors"
-            aria-label="Export data"
-          >
-            <Download size={20} />
-          </button>
+          {!comparisonMode && (
+            <button
+              onClick={() => onExport(countryData[0])}
+              className="p-2 bg-gray-800 text-white rounded-md hover:bg-gray-700 transition-colors"
+              aria-label="Export data"
+            >
+              <Download size={20} />
+            </button>
+          )}
         </div>
       </div>
+
+      {comparisonMetrics && (
+        <div className="mb-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-gray-800 p-4 rounded-lg">
+            <h4 className="text-sm font-medium text-gray-400">Average Growth Difference</h4>
+            <p className="text-lg font-bold text-white">
+              {comparisonMetrics.averageGrowthDiff > 0 ? '+' : ''}
+              {comparisonMetrics.averageGrowthDiff.toFixed(2)}%
+            </p>
+          </div>
+          <div className="bg-gray-800 p-4 rounded-lg">
+            <h4 className="text-sm font-medium text-gray-400">GDP Ratio Change</h4>
+            <p className="text-lg font-bold text-white">
+              {((comparisonMetrics.endingRatio / comparisonMetrics.startingRatio - 1) * 100).toFixed(2)}%
+            </p>
+          </div>
+          <div className="bg-gray-800 p-4 rounded-lg">
+            <h4 className="text-sm font-medium text-gray-400">Overtakes</h4>
+            <p className="text-lg font-bold text-white">
+              {comparisonMetrics.overtakes.length}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="h-[500px]">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart
-            data={filteredData}
+            data={combinedData}
             margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
             ref={chartRef}
           >
@@ -129,11 +220,6 @@ const Timeline: React.FC<TimelineProps> = ({
             <Tooltip
               content={({ active, payload, label }) => {
                 if (active && payload && payload.length) {
-                  const data = payload[0].payload;
-                  const leader = countryData.leaders.find(
-                    l => label >= l.startYear && label <= l.endYear
-                  );
-
                   return (
                     <motion.div
                       initial={{ opacity: 0, y: 10 }}
@@ -144,30 +230,42 @@ const Timeline: React.FC<TimelineProps> = ({
                       <p className="font-bold text-white">
                         {format(new Date(label, 0), 'yyyy')}
                       </p>
-                      <p className="text-gray-300">
-                        {showGrowthRate ? 'Growth: ' : 'GDP per Capita: '}
-                        <span className="font-semibold text-white">
-                          {showGrowthRate
-                            ? `${data.growth.toFixed(2)}%`
-                            : `$${data.value.toLocaleString()}`}
-                        </span>
-                      </p>
-                      {leader && (
-                        <div className="mt-2 border-t border-gray-700 pt-2">
-                          <p className="font-semibold text-white">{leader.name}</p>
-                          <p className="text-sm text-gray-400">{leader.party}</p>
-                          {leader.policies && (
-                            <div className="mt-1">
-                              <p className="text-xs text-gray-500">Key Policies:</p>
-                              <ul className="text-xs text-gray-400">
-                                {leader.policies.map((policy, index) => (
-                                  <li key={index}>• {policy}</li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                      {countryData.map((country, index) => {
+                        const data = payload.find(p => 
+                          p.dataKey === `${country.id}_${showGrowthRate ? 'growth' : 'value'}`
+                        );
+                        if (!data) return null;
+
+                        const leader = country.leaders.find(
+                          l => label >= l.startYear && label <= l.endYear
+                        );
+
+                        return (
+                          <div key={country.id} className={index > 0 ? 'mt-4 pt-4 border-t border-gray-700' : ''}>
+                            <p className="font-semibold text-white">{country.name}</p>
+                            <p className="text-gray-300">
+                              {showGrowthRate ? 'Growth: ' : 'GDP per Capita: '}
+                              <span className="font-semibold text-white">
+                                {showGrowthRate
+                                  ? `${data.value.toFixed(2)}%`
+                                  : `$${data.value.toLocaleString()}`}
+                              </span>
+                            </p>
+                            {leader && (
+                              <div className="mt-2">
+                                <p className="text-sm text-gray-400">{leader.name} ({leader.party})</p>
+                                {leader.policies && (
+                                  <ul className="text-xs text-gray-500 mt-1">
+                                    {leader.policies.map((policy, i) => (
+                                      <li key={i}>• {policy}</li>
+                                    ))}
+                                  </ul>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </motion.div>
                   );
                 }
@@ -182,27 +280,47 @@ const Timeline: React.FC<TimelineProps> = ({
               fill="#1F2937"
               tickFormatter={(value) => format(new Date(value, 0), 'yyyy')}
             />
-            {countryData.leaders.map((leader) => (
+            {countryData.map((country, index) => (
+              <React.Fragment key={country.id}>
+                {country.leaders.map((leader) => (
+                  <ReferenceLine
+                    key={`${country.id}-${leader.startYear}`}
+                    x={leader.startYear}
+                    stroke={COLORS[index]}
+                    strokeOpacity={0.5}
+                    label={{
+                      value: `${leader.name} (${country.name})`,
+                      angle: -45,
+                      position: 'insideTopRight',
+                      style: { fill: COLORS[index] }
+                    }}
+                  />
+                ))}
+                <Line
+                  type="monotone"
+                  dataKey={`${country.id}_${showGrowthRate ? 'growth' : 'value'}`}
+                  name={country.name}
+                  stroke={COLORS[index]}
+                  strokeWidth={2}
+                  dot={false}
+                  animationDuration={500}
+                />
+              </React.Fragment>
+            ))}
+            {comparisonMetrics?.overtakes.map((overtake, index) => (
               <ReferenceLine
-                key={leader.startYear}
-                x={leader.startYear}
-                stroke="#4B5563"
+                key={`overtake-${index}`}
+                x={overtake.year}
+                stroke="#9333EA"
+                strokeDasharray="3 3"
                 label={{
-                  value: leader.name,
+                  value: `${overtake.country} overtakes`,
                   angle: -45,
                   position: 'insideTopRight',
-                  style: { fill: '#9CA3AF' }
+                  style: { fill: '#9333EA' }
                 }}
               />
             ))}
-            <Line
-              type="monotone"
-              dataKey={showGrowthRate ? 'growth' : 'value'}
-              stroke="#3B82F6"
-              strokeWidth={2}
-              dot={false}
-              animationDuration={500}
-            />
           </LineChart>
         </ResponsiveContainer>
       </div>
